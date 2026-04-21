@@ -1,0 +1,1170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local LLM Hosting 09 — Sources of Non-Determinism in LLM Serving</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0a0a;
+            --bg-card: #0d1117;
+            --bg-code: #161b22;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --accent: #76B900;
+            --accent-dim: #76B90044;
+            --accent-glow: #76B90033;
+            --border: #21262d;
+            --font-display: 'Space Grotesk', sans-serif;
+            --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+            --font-body: 'Inter', sans-serif;
+            --max-width: 900px;
+        }
+
+        *, *::before, *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-family: var(--font-body);
+            font-size: 17px;
+            line-height: 1.7;
+            overflow-x: hidden;
+        }
+
+        /* ── Header ── */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 2rem 1.5rem;
+            text-align: center;
+            position: relative;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .hero > * {
+            position: relative;
+            z-index: 1;
+        }
+
+        .series-label {
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            color: var(--accent);
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            margin-bottom: 1rem;
+        }
+
+        .hero h1 {
+            font-family: var(--font-display);
+            font-size: clamp(2rem, 5vw, 3.2rem);
+            font-weight: 700;
+            color: var(--text-primary);
+            line-height: 1.2;
+            margin-bottom: 1rem;
+        }
+
+        .hero h1 .accent {
+            color: var(--accent);
+        }
+
+        .hero .subtitle {
+            font-size: 1.1rem;
+            color: var(--text-secondary);
+            max-width: 600px;
+            margin-bottom: 2rem;
+        }
+
+        /* ── Tag Pills ── */
+        .tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            justify-content: center;
+            margin-bottom: 2.5rem;
+        }
+
+        .tag {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            padding: 0.25rem 0.75rem;
+            border-radius: 999px;
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            background: var(--accent-dim);
+            white-space: nowrap;
+        }
+
+        /* ── Pipeline Flow Bar ── */
+        .pipeline {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: center;
+            gap: 0.25rem;
+            margin-bottom: 1rem;
+            max-width: var(--max-width);
+        }
+
+        .pipeline-step {
+            font-family: var(--font-mono);
+            font-size: 0.7rem;
+            padding: 0.3rem 0.7rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
+
+        .pipeline-arrow {
+            color: var(--accent);
+            font-size: 0.9rem;
+            font-weight: 700;
+        }
+
+        /* ── Slides ── */
+        .slide {
+            min-height: 100vh;
+            max-width: var(--max-width);
+            margin: 0 auto;
+            padding: 4rem 1.5rem;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .slide-number {
+            font-family: var(--font-display);
+            font-size: 5rem;
+            font-weight: 700;
+            color: var(--accent-dim);
+            position: absolute;
+            top: 2rem;
+            right: 1.5rem;
+            line-height: 1;
+            user-select: none;
+        }
+
+        .slide h2 {
+            font-family: var(--font-display);
+            font-size: 1.9rem;
+            font-weight: 700;
+            color: var(--accent);
+            margin-bottom: 1.5rem;
+            line-height: 1.25;
+        }
+
+        .slide h3 {
+            font-family: var(--font-display);
+            font-size: 1.3rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-top: 1.5rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .slide p {
+            margin-bottom: 1rem;
+            color: var(--text-secondary);
+        }
+
+        .slide p strong {
+            color: var(--text-primary);
+        }
+
+        .slide ul, .slide ol {
+            margin-bottom: 1rem;
+            padding-left: 1.5rem;
+            color: var(--text-secondary);
+        }
+
+        .slide li {
+            margin-bottom: 0.4rem;
+        }
+
+        .slide li strong {
+            color: var(--text-primary);
+        }
+
+        /* ── Code Blocks ── */
+        .code-block {
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin: 1.25rem 0;
+            overflow: hidden;
+        }
+
+        .code-header {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--accent);
+            background: rgba(118, 185, 0, 0.08);
+            padding: 0.4rem 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .code-block pre {
+            margin: 0;
+            padding: 1rem;
+            overflow-x: auto;
+        }
+
+        .code-block code {
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            line-height: 1.6;
+            color: #c9d1d9;
+        }
+
+        /* Syntax highlighting (manual) */
+        .kw { color: #ff7b72; }
+        .fn { color: #d2a8ff; }
+        .str { color: #a5d6ff; }
+        .cm { color: #8b949e; font-style: italic; }
+        .num { color: #79c0ff; }
+        .type { color: #ffa657; }
+        .dir { color: #ff7b72; }
+        .mac { color: #ffa657; }
+
+        /* ── Tables ── */
+        .table-wrap {
+            overflow-x: auto;
+            margin: 1.25rem 0;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+
+        th {
+            background: var(--bg-code);
+            color: var(--accent);
+            font-weight: 600;
+            text-align: left;
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--border);
+            font-family: var(--font-display);
+            white-space: nowrap;
+        }
+
+        td {
+            padding: 0.6rem 1rem;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-secondary);
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr:nth-child(even) td {
+            background: rgba(13, 17, 23, 0.5);
+        }
+
+        /* ── Diagrams ── */
+        .diagram-flow {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            margin: 1.5rem 0;
+            padding: 1.5rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+
+        .diagram-box {
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            padding: 0.5rem 1rem;
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-primary);
+            text-align: center;
+            white-space: nowrap;
+        }
+
+        .diagram-box.accent {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: rgba(118, 185, 0, 0.08);
+        }
+
+        .diagram-box.dim {
+            color: var(--text-secondary);
+            border-color: var(--border);
+        }
+
+        .diagram-arrow {
+            color: var(--accent);
+            font-size: 1.3rem;
+            font-weight: 700;
+        }
+
+        /* Vertical flow diagrams */
+        .diagram-vertical {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.3rem;
+            margin: 1.5rem 0;
+            padding: 1.5rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+
+        .diagram-vertical .diagram-arrow {
+            font-size: 1.1rem;
+        }
+
+        /* Nested hierarchy diagram */
+        .hierarchy {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            margin: 1.5rem 0;
+            padding: 1.5rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+
+        .hierarchy-level {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .hierarchy-label {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            min-width: 80px;
+            text-align: right;
+        }
+
+        .hierarchy-items {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+        }
+
+        .hierarchy-item {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            padding: 0.3rem 0.6rem;
+            border-radius: 4px;
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+        }
+
+        .hierarchy-item.accent {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: rgba(118, 185, 0, 0.08);
+        }
+
+        /* Grid diagram */
+        .diagram-grid {
+            display: grid;
+            gap: 0.75rem;
+            margin: 1.5rem 0;
+            padding: 1.5rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+
+        .diagram-grid.cols-2 {
+            grid-template-columns: 1fr 1fr;
+        }
+
+        .diagram-grid.cols-3 {
+            grid-template-columns: 1fr 1fr 1fr;
+        }
+
+        .diagram-panel {
+            padding: 1rem;
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+        }
+
+        .diagram-panel.accent-border {
+            border-left: 3px solid var(--accent);
+        }
+
+        .diagram-panel h4 {
+            font-family: var(--font-display);
+            font-size: 1rem;
+            color: var(--accent);
+            margin-bottom: 0.5rem;
+        }
+
+        .diagram-panel p, .diagram-panel ul {
+            font-size: 0.85rem;
+        }
+
+        /* ── Callout Boxes ── */
+        .callout {
+            background: var(--bg-card);
+            border-left: 3px solid var(--accent);
+            border-radius: 0 8px 8px 0;
+            padding: 1rem 1.25rem;
+            margin: 1.25rem 0;
+        }
+
+        .callout p {
+            margin-bottom: 0;
+        }
+
+        .callout .callout-label {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 0.3rem;
+        }
+
+        /* ── Tier Visual ── */
+        .tier-visual {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            margin: 1.5rem 0;
+            padding: 1.5rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+
+        .tier-bar {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .tier-label {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            min-width: 90px;
+            text-align: right;
+        }
+
+        .tier-fill {
+            height: 32px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            padding: 0 0.75rem;
+            font-family: var(--font-mono);
+            font-size: 0.7rem;
+            white-space: nowrap;
+            transition: width 0.6s ease;
+        }
+
+        .tier-cost {
+            font-family: var(--font-mono);
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            min-width: 70px;
+        }
+
+        /* ── Contents list ── */
+        .contents-list {
+            list-style: none;
+            padding-left: 0;
+            counter-reset: contents;
+        }
+
+        .contents-list li {
+            counter-increment: contents;
+            padding: 0.6rem 0;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .contents-list li:last-child {
+            border-bottom: none;
+        }
+
+        .contents-list li::before {
+            content: counter(contents, decimal-leading-zero);
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            color: var(--accent);
+            min-width: 2rem;
+        }
+
+        .contents-list a {
+            color: var(--text-primary);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+
+        .contents-list a:hover {
+            color: var(--accent);
+        }
+
+        /* ── Footer ── */
+        .footer {
+            text-align: center;
+            padding: 3rem 1.5rem;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            border-top: 1px solid var(--border);
+            max-width: var(--max-width);
+            margin: 0 auto;
+        }
+
+        .footer a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        .footer a:hover {
+            text-decoration: underline;
+        }
+
+        /* ── Responsive ── */
+        @media (max-width: 640px) {
+            .slide {
+                padding: 3rem 1rem;
+                min-height: auto;
+            }
+
+            .slide-number {
+                font-size: 3rem;
+                top: 1.5rem;
+                right: 1rem;
+            }
+
+            .slide h2 {
+                font-size: 1.5rem;
+            }
+
+            .diagram-grid.cols-2,
+            .diagram-grid.cols-3 {
+                grid-template-columns: 1fr;
+            }
+
+            .pipeline {
+                gap: 0.15rem;
+            }
+
+            .pipeline-step {
+                font-size: 0.6rem;
+                padding: 0.2rem 0.4rem;
+            }
+
+            .hero h1 {
+                font-size: 1.8rem;
+            }
+
+            table {
+                font-size: 0.78rem;
+            }
+
+            .tier-label {
+                min-width: 60px;
+                font-size: 0.65rem;
+            }
+
+            .tier-fill {
+                font-size: 0.6rem;
+                height: 26px;
+            }
+        }
+
+        /* ── Interactive controls (added for Local LLM series) ── */
+        .control-panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.25rem;
+            margin: 1.25rem 0;
+        }
+        .control-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 0.75rem;
+        }
+        .control-row label {
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            min-width: 180px;
+        }
+        .control-row input[type="range"] {
+            flex: 1;
+            min-width: 160px;
+            accent-color: var(--accent);
+        }
+        .control-row input[type="number"],
+        .control-row select {
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            border-radius: 4px;
+            padding: 0.3rem 0.5rem;
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+        }
+        .control-row .val {
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            color: var(--accent);
+            min-width: 80px;
+            text-align: right;
+        }
+        .btn {
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            padding: 0.4rem 0.9rem;
+            background: var(--accent-dim);
+            color: var(--accent);
+            border: 1px solid var(--accent);
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.15s ease;
+        }
+        .btn:hover { background: rgba(118, 185, 0, 0.2); }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .btn.secondary {
+            background: var(--bg-code);
+            color: var(--text-secondary);
+            border-color: var(--border);
+        }
+        .result-box {
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--accent);
+            border-radius: 4px;
+            padding: 0.75rem 1rem;
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            color: var(--text-primary);
+            margin-top: 0.75rem;
+        }
+        .result-box .line-label { color: var(--text-secondary); }
+        .result-box .line-val   { color: var(--accent); font-weight: 600; }
+        .metric-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 0.5rem;
+            margin-top: 0.75rem;
+        }
+        .metric {
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.6rem 0.8rem;
+            text-align: center;
+        }
+        .metric .metric-label {
+            font-family: var(--font-mono);
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+        .metric .metric-value {
+            font-family: var(--font-display);
+            font-size: 1.25rem;
+            color: var(--accent);
+            font-weight: 600;
+            margin-top: 0.2rem;
+        }
+
+        /* Canvas / SVG containers */
+        .canvas-wrap {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            margin: 1.25rem 0;
+            overflow-x: auto;
+        }
+        .canvas-wrap canvas,
+        .canvas-wrap svg {
+            display: block;
+            margin: 0 auto;
+            max-width: 100%;
+        }
+
+        /* Small inline badge */
+        .badge {
+            display: inline-block;
+            font-family: var(--font-mono);
+            font-size: 0.65rem;
+            padding: 0.1rem 0.45rem;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            vertical-align: middle;
+            margin-left: 0.3rem;
+        }
+        .badge.ok    { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+        .badge.warn  { border-color: #ffa657; color: #ffa657; background: rgba(255,166,87,0.08); }
+        .badge.bad   { border-color: #ff7b72; color: #ff7b72; background: rgba(255,123,114,0.08); }
+
+    </style>
+</head>
+<body>
+
+<header class="hero">
+    <div class="series-label">Local LLM Hosting Series — Presentation 09</div>
+    <h1>Sources of <span class="accent">Non-Determinism</span> in LLM Serving</h1>
+    <p class="subtitle">Why the same prompt gives different tokens twice, where determinism really comes from, and how to get it back when you need reproducible evals.</p>
+
+    <div class="tags">
+        <span class="tag">Determinism</span><span class="tag">Batch invariance</span>
+        <span class="tag">FP16</span><span class="tag">Sampling</span>
+        <span class="tag">Evals</span>
+    </div>
+
+    <div class="pipeline">
+        <span class="pipeline-step">Why we care</span>
+        <span class="pipeline-arrow">&rarr;</span>
+        <span class="pipeline-step">Sampling</span>
+        <span class="pipeline-arrow">&rarr;</span>
+        <span class="pipeline-step">FP math</span>
+        <span class="pipeline-arrow">&rarr;</span>
+        <span class="pipeline-step">Batch</span>
+        <span class="pipeline-arrow">&rarr;</span>
+        <span class="pipeline-step">Scheduler</span>
+        <span class="pipeline-arrow">&rarr;</span>
+        <span class="pipeline-step">Mitigate</span>
+    </div>
+</header>
+
+<section class="slide" id="slide-00">
+    <div class="slide-number">00</div>
+    <h2>Topics</h2>
+    <ul class="contents-list">
+        <li><a href="#slide-01">Why Reproducibility Matters &mdash; And When It Doesn't</a></li>
+        <li><a href="#slide-02">Sampling &mdash; The Obvious Source</a></li>
+        <li><a href="#slide-03">Non-Associative Floating-Point &mdash; The Quiet One</a></li>
+        <li><a href="#slide-04">Batch-Size-Dependent Outputs</a></li>
+        <li><a href="#slide-05">Scheduler-Induced Drift</a></li>
+        <li><a href="#slide-06">Quantisation &amp; Hardware Differences</a></li>
+        <li><a href="#slide-07">Library &amp; Kernel Version Drift</a></li>
+        <li><a href="#slide-08">Interactive: What Would Differ?</a></li>
+        <li><a href="#slide-09">Mitigations &mdash; Practical Recipes</a></li>
+    </ul>
+</section>
+
+<section class="slide" id="slide-01">
+    <div class="slide-number">01</div>
+    <h2>Why Reproducibility Matters &mdash; And When It Doesn't</h2>
+    <div class="diagram-grid cols-2">
+        <div class="diagram-panel accent-border">
+            <h4>Matters</h4>
+            <ul>
+                <li><strong>Evals</strong> &mdash; comparing two models or two prompt variants is impossible if outputs drift</li>
+                <li><strong>Regression tests</strong> in CI &mdash; "does this prompt still produce valid JSON"</li>
+                <li><strong>Audit / compliance</strong> &mdash; reproducing what a model said last Tuesday</li>
+                <li><strong>Research</strong> &mdash; ablation studies that require identical conditions</li>
+            </ul>
+        </div>
+        <div class="diagram-panel accent-border">
+            <h4>Does not matter</h4>
+            <ul>
+                <li><strong>Production chat / agents</strong> &mdash; some variability is harmless and often desirable</li>
+                <li><strong>Creative writing</strong> &mdash; you <em>want</em> diversity</li>
+                <li><strong>Multi-turn search</strong> &mdash; you care about final answer quality, not token-by-token identity</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="callout">
+        <div class="callout-label">Starting premise</div>
+        <p>Most engineers think "<code>temperature=0</code> means deterministic". It does not. Below we walk through seven independent reasons the same prompt can produce different tokens even at temperature 0.</p>
+    </div>
+</section>
+
+<section class="slide" id="slide-02">
+    <div class="slide-number">02</div>
+    <h2>Sampling &mdash; The Obvious Source</h2>
+    <p>Temperature-based sampling draws from the softmax distribution. With <code>temperature &gt; 0</code>, different RNG seeds give different tokens. Fixing this is easy if you know where the seed lives:</p>
+
+    <div class="code-block">
+        <div class="code-header">Seed the sampler (vLLM)</div>
+        <pre><code>curl http://host:8000/v1/chat/completions -d <span class="str">'{
+  &quot;model&quot;: &quot;...&quot;,
+  &quot;messages&quot;: [...],
+  &quot;temperature&quot;: 0.0,
+  &quot;seed&quot;: 42,
+  &quot;top_p&quot;: 1.0,
+  &quot;top_k&quot;: -1
+}'</span></code></pre>
+    </div>
+
+    <h3>The ties problem</h3>
+    <p>Even with <code>temperature=0</code>, the argmax can tie &mdash; two tokens with the <strong>exact</strong> same logit. Which one wins depends on the CUDA kernel's tie-break rule and sometimes on the warp scheduling. Rare in practice but it's one of the reasons <code>temperature=0</code> isn't a strict guarantee.</p>
+
+    <h3>Speculative decoding silently re-rolls</h3>
+    <p>With speculative decoding enabled, the draft model proposes N tokens and the big model accepts a prefix. When the draft is rejected, the big model's sample replaces it. Different draft rejection counts &rarr; different interleavings &rarr; different sampler calls. Numbers identical over many runs only with <code>temperature=0</code> AND a deterministic draft model (beware batch-dependent kernels).</p>
+</section>
+
+<section class="slide" id="slide-03">
+    <div class="slide-number">03</div>
+    <h2>Non-Associative Floating-Point &mdash; The Quiet One</h2>
+    <p>Floating-point addition is <em>not</em> associative: <code>(a + b) + c &ne; a + (b + c)</code> in general. Every reduction the GPU does &mdash; softmax, layer-norm, row-sums in matmul &mdash; depends on order. Change the order, change the bits.</p>
+
+    <div class="code-block">
+        <div class="code-header">Live demo you can paste in Python</div>
+        <pre><code>&gt;&gt;&gt; <span class="kw">import</span> numpy <span class="kw">as</span> np
+&gt;&gt;&gt; a = np.array([<span class="num">1e20</span>, <span class="num">1.0</span>, -<span class="num">1e20</span>], dtype=np.float32)
+&gt;&gt;&gt; a.sum()           <span class="cm"># left-to-right reduction</span>
+0.0
+&gt;&gt;&gt; a[::-<span class="num">1</span>].sum()      <span class="cm"># reversed order</span>
+1.0</code></pre>
+    </div>
+
+    <h3>Where this bites in transformers</h3>
+    <ul>
+        <li><strong>Attention softmax</strong> reduces over all past keys. Different tile sizes or warp orderings in flash-attention give different partial sums.</li>
+        <li><strong>Matmul</strong> tiles and accumulates into FP32. Split-K vs non-split-K produces different reductions for the same result.</li>
+        <li><strong>Layer-norm</strong> / <strong>RMS-norm</strong> sum squared hidden values &mdash; order-dependent.</li>
+        <li><strong>All-reduce</strong> (TP across GPUs) uses ring or tree algorithms; two different topologies produce two different bitwise answers, identical to within ~1 ulp.</li>
+    </ul>
+
+    <div class="callout">
+        <div class="callout-label">The argmax cliff</div>
+        <p>Individually these are tiny &mdash; ulp-level differences in logits. But the argmax operation is discontinuous: if the difference straddles a tie-breaking boundary, the output token flips. Two "logit-identical" runs on different hardware can produce different text. You'll see it most on the 3rd or 4th token, then it cascades.</p>
+    </div>
+</section>
+
+<section class="slide" id="slide-04">
+    <div class="slide-number">04</div>
+    <h2>Batch-Size-Dependent Outputs</h2>
+    <p>The single most common surprise: run a prompt alone &rarr; token X. Run it in a batch of 8 &rarr; token Y. <strong>Same weights, same prompt, same seed, different tokens.</strong></p>
+
+    <h3>Why</h3>
+    <ul>
+        <li>Matmul kernels pick different tile / split-K strategies at different batch sizes.</li>
+        <li>Flash-Attention picks different tile sizes per (batch, seqlen) combination.</li>
+        <li>Fused kernels (softmax+dropout etc.) have different reduction orders when the effective M or N changes.</li>
+        <li>Continuous batching means the "neighbours" in the batch change <em>step by step</em> — so the prompt you care about gets different numerical context every decode.</li>
+    </ul>
+
+    <div class="canvas-wrap">
+        <svg viewBox="0 0 720 150" width="720" height="150" xmlns="http://www.w3.org/2000/svg">
+            <style>
+                .cell { fill: #161b22; stroke: #30363d; }
+                .a    { fill: rgba(118,185,0,0.35); stroke: #76B900; }
+                .b    { fill: rgba(210,168,255,0.3); stroke: #d2a8ff; }
+                .c    { fill: rgba(255,166,87,0.3); stroke: #ffa657; }
+                .t    { fill: #e6edf3; font-family: 'JetBrains Mono', monospace; font-size: 10px; }
+                .h    { fill: #76B900; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 13px; }
+                .d    { fill: #8b949e; font-family: 'JetBrains Mono', monospace; font-size: 10px; }
+            </style>
+            <text x="10" y="18" class="h">One sequence, three different batch neighbours each step</text>
+
+            <g transform="translate(10,30)">
+              <text x="0" y="14" class="d">step t</text>
+              <rect x="60"  width="80" height="20" class="a"/><text x="70" y="14" class="t">mine</text>
+              <rect x="145" width="80" height="20" class="b"/><text x="155" y="14" class="t">neighbour</text>
+              <rect x="230" width="80" height="20" class="c"/><text x="240" y="14" class="t">neighbour</text>
+            </g>
+            <g transform="translate(10,60)">
+              <text x="0" y="14" class="d">step t+1</text>
+              <rect x="60"  width="80" height="20" class="a"/><text x="70" y="14" class="t">mine</text>
+              <rect x="145" width="80" height="20" class="c"/><text x="155" y="14" class="t">(new arrival)</text>
+              <rect x="230" width="80" height="20" class="cell"/><text x="240" y="14" class="t">(finished)</text>
+            </g>
+            <g transform="translate(10,90)">
+              <text x="0" y="14" class="d">step t+2</text>
+              <rect x="60"  width="80" height="20" class="a"/><text x="70" y="14" class="t">mine</text>
+              <rect x="145" width="80" height="20" class="c"/><text x="155" y="14" class="t">neighbour</text>
+              <rect x="230" width="80" height="20" class="b"/><text x="240" y="14" class="t">neighbour</text>
+            </g>
+            <text x="10" y="140" class="d">Effective batch shape changes each step &rarr; kernels pick different tiles &rarr; reductions re-order &rarr; logits differ at ulp.</text>
+        </svg>
+    </div>
+</section>
+
+<section class="slide" id="slide-05">
+    <div class="slide-number">05</div>
+    <h2>Scheduler-Induced Drift</h2>
+    <p>vLLM, TGI, SGLang, TRT-LLM all have iteration-level schedulers. Three sources of drift in there:</p>
+    <div class="diagram-grid cols-2">
+        <div class="diagram-panel accent-border">
+            <h4>Preemption</h4>
+            <p>When KV pool fills up, vLLM preempts the lowest-priority sequence and recomputes its prefix later. Recomputation can land at a different batch size &rarr; different logits.</p>
+        </div>
+        <div class="diagram-panel accent-border">
+            <h4>Prefix caching</h4>
+            <p>If someone else already populated the pages for your system prompt, you reuse those K/V tensors. The bits depend on the <em>batch size that originally filled them</em>. So re-run order matters.</p>
+        </div>
+        <div class="diagram-panel accent-border">
+            <h4>Chunked prefill interleaving</h4>
+            <p>Chunked prefill reorders prompt tiles. For the big matmul, reordering rows matters to bitwise output but not to semantics.</p>
+        </div>
+        <div class="diagram-panel accent-border">
+            <h4>LoRA switching</h4>
+            <p>When multi-LoRA is enabled, the scheduler may group same-adapter requests together. The batch composition therefore depends on which adapters arrive, not just which sequences.</p>
+        </div>
+    </div>
+</section>
+
+<section class="slide" id="slide-06">
+    <div class="slide-number">06</div>
+    <h2>Quantisation &amp; Hardware Differences</h2>
+
+    <div class="diagram-grid cols-2">
+        <div class="diagram-panel accent-border">
+            <h4>Precision</h4>
+            <p>FP16, BF16, FP8, INT4 each round to different grids. Two deployments identical except precision will disagree on ~1-3% of tokens, nearly always on ambiguous next-token choices.</p>
+        </div>
+        <div class="diagram-panel accent-border">
+            <h4>KV cache precision</h4>
+            <p><code>--kv-cache-dtype fp8</code> rounds every cached K/V entry into FP8. Long after the prompt was processed, those tokens look different in attention. Quality impact is tiny, determinism impact vs an FP16 KV run is real.</p>
+        </div>
+        <div class="diagram-panel accent-border">
+            <h4>Kernel variant</h4>
+            <p>Ampere vs Ada vs Hopper vs Blackwell pick different CUTLASS schedules for the same matmul. The same library at the same version will not produce the same bytes across architectures.</p>
+        </div>
+        <div class="diagram-panel accent-border">
+            <h4>TP world size</h4>
+            <p>TP=2 and TP=4 reduce over different groups of heads. All-reduce sums happen in different tree orders. Determinism is preserved within a fixed TP size, not across.</p>
+        </div>
+    </div>
+</section>
+
+<section class="slide" id="slide-07">
+    <div class="slide-number">07</div>
+    <h2>Library &amp; Kernel Version Drift</h2>
+    <p>Pinning <em>the model</em> is the obvious part. Easy to forget: kernels ship with libraries, and libraries change.</p>
+    <div class="table-wrap">
+        <table>
+            <thead><tr><th>Layer</th><th>What can change under you</th></tr></thead>
+            <tbody>
+                <tr><td>NVIDIA driver</td><td>PTX JIT version; affects compiled kernels</td></tr>
+                <tr><td>CUDA toolkit</td><td>cuBLAS / cuDNN pick different algorithms per version</td></tr>
+                <tr><td>cuBLASLt auto-heuristics</td><td>Picks an algorithm at run-time based on probe timings</td></tr>
+                <tr><td>Flash-Attention</td><td>v2 vs v3 vs Hopper-tuned pick different tile sizes</td></tr>
+                <tr><td>vLLM / SGLang / TRT-LLM</td><td>Version bumps add/remove fused kernels</td></tr>
+                <tr><td>NCCL</td><td>Algorithm choice (ring / tree) can flip with topology cache</td></tr>
+                <tr><td>Tokeniser</td><td>Different tokeniser versions can produce different prompt IDs. Lock this especially.</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="callout">
+        <div class="callout-label">The one pin nobody sets</div>
+        <p><code>CUBLASLT_WORKSPACE_CONFIG</code> and <code>CUBLAS_WORKSPACE_CONFIG=:4096:8</code> force deterministic algorithms in cuBLAS. Without that, cuBLAS is free to pick a faster non-deterministic kernel and sometimes does.</p>
+    </div>
+</section>
+
+<section class="slide" id="slide-08">
+    <div class="slide-number">08</div>
+    <h2>Interactive: What Would Differ?</h2>
+    <p>Flip the bits and see which determinism guarantees survive.</p>
+
+    <div class="control-panel">
+        <div class="control-row">
+            <label for="d-temp">Temperature</label>
+            <select id="d-temp"><option value="0">0 (greedy)</option><option value="1">&gt; 0</option></select>
+        </div>
+        <div class="control-row">
+            <label for="d-seed">Seed set?</label>
+            <select id="d-seed"><option value="1">yes</option><option value="0">no</option></select>
+        </div>
+        <div class="control-row">
+            <label for="d-spec">Speculative decoding</label>
+            <select id="d-spec"><option value="0">off</option><option value="1">on</option></select>
+        </div>
+        <div class="control-row">
+            <label for="d-batch">Same batch neighbours each run?</label>
+            <select id="d-batch"><option value="1">yes</option><option value="0">no (typical serving)</option></select>
+        </div>
+        <div class="control-row">
+            <label for="d-prefix">Prefix cache</label>
+            <select id="d-prefix"><option value="off">off</option><option value="shared">on &amp; shared with others</option></select>
+        </div>
+        <div class="control-row">
+            <label for="d-tp">TP world size change?</label>
+            <select id="d-tp"><option value="0">no</option><option value="1">yes</option></select>
+        </div>
+        <div class="control-row">
+            <label for="d-hw">Different GPU arch?</label>
+            <select id="d-hw"><option value="0">no</option><option value="1">yes</option></select>
+        </div>
+        <div class="control-row">
+            <label for="d-ver">Different lib/kernel version?</label>
+            <select id="d-ver"><option value="0">no (pinned)</option><option value="1">yes</option></select>
+        </div>
+        <div id="d-out" class="result-box"></div>
+    </div>
+
+    <script>
+    (function(){
+        function run(){
+            const temp = +document.getElementById('d-temp').value;
+            const seed = +document.getElementById('d-seed').value;
+            const spec = +document.getElementById('d-spec').value;
+            const batch = +document.getElementById('d-batch').value;
+            const prefix = document.getElementById('d-prefix').value;
+            const tp = +document.getElementById('d-tp').value;
+            const hw = +document.getElementById('d-hw').value;
+            const ver = +document.getElementById('d-ver').value;
+
+            const causes = [];
+            if (temp === 1 && seed === 0) causes.push('<span class="badge bad">sampling</span> temperature &gt; 0 with no seed &mdash; tokens will vary every call.');
+            if (temp === 1 && seed === 1) causes.push('<span class="badge warn">sampling</span> seed fixes RNG but batch-size changes can still perturb logits &rarr; different argmax at ties.');
+            if (spec === 1) causes.push('<span class="badge warn">spec decoding</span> draft-accept / reject pattern shifts sampler position.');
+            if (batch === 0) causes.push('<span class="badge bad">batch</span> different neighbours each run &rarr; matmul tiles differ &rarr; ulp drift &rarr; occasional token flip.');
+            if (prefix === 'shared') causes.push('<span class="badge warn">prefix cache</span> reusing cached K/V filled by others; order of bytes depends on who populated first.');
+            if (tp === 1) causes.push('<span class="badge bad">TP change</span> all-reduce sums differ across world sizes.');
+            if (hw === 1) causes.push('<span class="badge bad">hardware</span> CUTLASS / Flash-Attention pick different kernels per arch &rarr; bitwise differ.');
+            if (ver === 1) causes.push('<span class="badge bad">version</span> any library bump can change algorithm selection; pin versions for evals.');
+
+            let verdict;
+            if (temp === 0 && seed === 1 && spec === 0 && batch === 1 && prefix === 'off' && tp === 0 && hw === 0 && ver === 0) {
+                verdict = '<span class="badge ok">bitwise-reproducible</span> with greedy, fixed seed, alone in the batch, no shared cache, pinned stack, same hardware.';
+            } else if (temp === 0 && batch === 1 && prefix === 'off' && tp === 0 && hw === 0 && ver === 0) {
+                verdict = '<span class="badge ok">should reproduce</span> but verify &mdash; tie-break races can flip 1 in 10k tokens.';
+            } else {
+                verdict = '<span class="badge warn">drift expected</span> outputs will differ by the following:';
+            }
+
+            document.getElementById('d-out').innerHTML = '<div>' + verdict + '</div>' +
+                (causes.length ? '<div style="margin-top:0.5rem;color:var(--text-secondary);">' + causes.map(c=>'• '+c).join('<br>') + '</div>' : '');
+        }
+        ['d-temp','d-seed','d-spec','d-batch','d-prefix','d-tp','d-hw','d-ver'].forEach(id =>
+            document.getElementById(id).addEventListener('change', run));
+        run();
+    })();
+    </script>
+</section>
+
+<section class="slide" id="slide-09">
+    <div class="slide-number">09</div>
+    <h2>Mitigations &mdash; Practical Recipes</h2>
+
+    <div class="diagram-grid cols-2">
+        <div class="diagram-panel accent-border">
+            <h4>For evals &amp; CI</h4>
+            <ul>
+                <li><code>temperature=0</code>, <code>top_p=1</code>, <code>top_k=-1</code>, fixed <code>seed</code></li>
+                <li>Turn off speculative decoding</li>
+                <li>Turn off prefix caching (<code>--no-enable-prefix-caching</code>)</li>
+                <li>Set <code>--max-num-seqs 1</code> for eval, or pad to a fixed batch size</li>
+                <li>Pin image digest (<code>vllm/vllm-openai@sha256:…</code>), not a tag</li>
+                <li>Pin NVIDIA driver, CUDA, vLLM, flash-attn versions</li>
+                <li>Run on the same GPU arch (don't mix 4090 and H100 for the same eval)</li>
+            </ul>
+        </div>
+        <div class="diagram-panel accent-border">
+            <h4>For production (just to reduce surprise)</h4>
+            <ul>
+                <li>Log <code>seed</code>, <code>temperature</code>, model revision, and server build with every request</li>
+                <li>Lock model digest (HF revision SHA, not tag)</li>
+                <li>Lock tokeniser; use the same <code>tokenizer.json</code> everywhere</li>
+                <li>Avoid upgrading vLLM mid-sprint; tie upgrades to eval re-runs</li>
+                <li>Don't compare outputs across different TP sizes; use a per-TP baseline</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="code-block">
+        <div class="code-header">Deterministic-enough vLLM config for evals</div>
+        <pre><code>docker run --rm \
+    --gpus all --ipc=host \
+    -e CUBLAS_WORKSPACE_CONFIG=<span class="str">:4096:8</span> \
+    -e VLLM_USE_V1=0 \
+    vllm/vllm-openai:v0.7.0 \
+    --model &lt;pinned-revision&gt; \
+    --dtype bfloat16 \
+    --max-num-seqs 1 \
+    --no-enable-prefix-caching \
+    --disable-log-requests</code></pre>
+    </div>
+
+    <div class="callout">
+        <div class="callout-label">Honest bottom line</div>
+        <p>Bitwise reproducibility across hardware and versions is <em>not</em> a thing you get for free. What you can get, reliably, is reproducibility <strong>within a pinned deployment</strong>: same image digest, same GPU arch, same flags, same batch policy, fixed seed, no speculative decoding, no prefix cache. That's enough for evals and CI. Anything else requires hardware-level reproducibility guarantees most kernels don't provide.</p>
+    </div>
+</section>
+<!-- ════════════════════════════════════ Footer ════════════════════════════════════ -->
+<footer class="footer">
+    <p>Part of the <a href="https://github.com/BrendanJamesLynskey/LLMs#local-llm-hosting">Local LLM Hosting Series</a></p>
+    <p style="margin-top: 0.5rem; font-size: 0.8rem;"><a href="https://github.com/BrendanJamesLynskey/LLMs#local-llm-hosting">Back to Series Index</a></p>
+</footer>
+
+<script>
+    // Smooth scroll for TOC links
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener('click', function (e) {
+            e.preventDefault();
+            const target = document.querySelector(this.getAttribute('href'));
+            if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+    });
+
+    // Subtle fade-in on scroll
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                entry.target.style.opacity = '1';
+                entry.target.style.transform = 'translateY(0)';
+            }
+        });
+    }, { threshold: 0.1 });
+    document.querySelectorAll('.slide').forEach(slide => {
+        slide.style.opacity = '0';
+        slide.style.transform = 'translateY(30px)';
+        slide.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
+        observer.observe(slide);
+    });
+</script>
+
+</body>
+</html>
